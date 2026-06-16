@@ -8,7 +8,7 @@ import hashlib
 
 # ====== PAGE CONFIG ======
 st.set_page_config(
-    page_title="ScopeAI - GenZ NCERT Friend",
+    page_title="ScopeAI - NCERT ka scene, ScopeAI se clean",
     page_icon="🚀",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -23,11 +23,11 @@ st.markdown("""
         font-family: 'Space Grotesk', sans-serif;
     }
 
-   .main {
+  .main {
         background: #0a0a0a;
     }
 
-   .stApp {
+  .stApp {
         background: linear-gradient(135deg, #0a0a0a 0%, #1a1a1a 100%);
     }
 
@@ -39,6 +39,16 @@ st.markdown("""
         font-size: 3rem!important;
         text-align: center;
         animation: glow 2s ease-in-out infinite alternate;
+        margin-bottom: 0px;
+    }
+
+   .tagline {
+        text-align: center;
+        color: #888;
+        font-size: 1.1rem;
+        margin-top: -10px;
+        margin-bottom: 30px;
+        font-weight: 500;
     }
 
     @keyframes glow {
@@ -46,7 +56,7 @@ st.markdown("""
         to { filter: drop-shadow(0 0 20px #FF00FF); }
     }
 
-   .stButton>button {
+  .stButton>button {
         background: linear-gradient(90deg, #00F5FF, #FF00FF);
         color: white;
         border: none;
@@ -55,12 +65,12 @@ st.markdown("""
         transition: all 0.3s;
     }
 
-   .stButton>button:hover {
+  .stButton>button:hover {
         transform: scale(1.05);
         box-shadow: 0 0 20px #00F5FF;
     }
 
-   .stChatMessage {
+  .stChatMessage {
         background: #1a1a1a!important;
         border: 1px solid #333!important;
         border-radius: 16px!important;
@@ -90,9 +100,9 @@ def get_groq_client():
 
 client = get_groq_client()
 
-# ====== HEADER ======
+# ====== HEADER WITH TAGLINE ======
 st.markdown("<h1>ScopeAI 🚀</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #888; font-size: 1.1rem;'>Your GenZ NCERT bestie. No cap, just facts 💯</p>", unsafe_allow_html=True)
+st.markdown("<p class='tagline'>NCERT ka scene, ScopeAI se clean 🖤</p>", unsafe_allow_html=True)
 
 # ====== ANTI-REPEAT HASH ======
 def get_question_hash(text):
@@ -128,8 +138,10 @@ with col2:
                 st.toast(f"PDF error bestie: {e}", icon="❌")
 
         # Check image uploaded
+        img_context = ""
         if uploaded_img:
             st.toast("Image dekh li bestie 📸", icon="✅")
+            img_context = "User ne ek image upload ki hai. Question image se related ho sakta hai."
 
         # Anti-repeat check
         current_hash = get_question_hash(prompt + pdf_text)
@@ -143,6 +155,8 @@ with col2:
         full_prompt = prompt
         if pdf_text:
             full_prompt = f"PDF Context: {pdf_text}\n\nQuestion: {prompt}"
+        if img_context:
+            full_prompt = f"{img_context}\n\nQuestion: {prompt}"
 
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -153,16 +167,19 @@ with col2:
             message_placeholder = st.empty()
 
             try:
-                # System prompt for GenZ vibe
+                # System prompt for GenZ vibe + NCERT accuracy
                 system_msg = """You are ScopeAI, a GenZ NCERT study buddy for Indian students class 6-12.
                 Reply in Hinglish with GenZ slang: 'bhai', 'fr', 'no cap', 'bestie', 'scene', 'vibe'.
-                Be accurate for NCERT but keep it fun and short.
+                Be 100% accurate for NCERT but keep it fun and short.
                 If question is short/simple, give 2-3 line answer max.
                 If complex, give step-by-step but still GenZ style.
-                Never repeat same answer. Always add emojis."""
+                Never repeat same answer. Always add emojis.
+                If user uploads PDF, use that context to answer.
+                If user uploads image, assume question is about that image.
+                Tagline: NCERT ka scene, ScopeAI se clean."""
 
                 messages = [{"role": "system", "content": system_msg}]
-                messages.extend(st.session_state.messages)
+                messages.extend([{"role": m["role"], "content": m["content"]} for m in st.session_state.messages])
 
                 # Stream response
                 stream = client.chat.completions.create(
@@ -192,4 +209,4 @@ with col2:
         st.rerun()
 
 # ====== FOOTER ======
-st.markdown("<p style='text-align: center; color: #444; margin-top: 50px;'>Made with 💜 for NCERT students | ScopeAI 2026</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #444; margin-top: 50px;'>Made with 💜 for NCERT students | NCERT ka scene, ScopeAI se clean | ScopeAI 2026</p>", unsafe_allow_html=True)
