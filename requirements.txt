@@ -1,6 +1,6 @@
 streamlit==1.35.0
-pandas==2.0.3
-matplotlib==3.8.4
+pandas
+matplotlib
 groq
 PyPDF2
 Pillow
