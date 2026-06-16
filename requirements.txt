@@ -1,6 +1,7 @@
-streamlit==1.38.0
-groq==0.9.0
-httpx==0.27.0
-pypdf==4.2.0
-Pillow==10.4.0
-pandas==2.2.2
+streamlit==1.35.0
+pandas==2.0.3
+matplotlib==3.8.4
+groq
+PyPDF2
+Pillow
+requests
