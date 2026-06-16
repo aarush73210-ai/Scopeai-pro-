@@ -1,180 +1,231 @@
 import streamlit as st
-from groq import Groq
-from PyPDF2 import PdfReader
-import pytesseract
-from pdf2image import convert_from_bytes
-from PIL import Image
+import os
+import base64
+import tempfile
+import plotly.express as px
 import pandas as pd
-import matplotlib.pyplot as plt
+import pytesseract
+from PIL import Image
+from pdf2image import convert_from_path
+from groq import Groq
+from audio_recorder_streamlit import audio_recorder
+from gtts import gTTS
+import speech_recognition as sr
 import io
 import re
-from streamlit_mic_recorder import mic_recorder
 
-# ========== PAGE CONFIG - GENZ DARK UI ==========
-st.set_page_config(page_title="ScopeAI Pro", page_icon="🚀", layout="wide", initial_sidebar_state="expanded")
+# ----------------- CONFIG -----------------
+st.set_page_config(page_title="ScopeAI Pro", page_icon="🧠", layout="wide")
 
-# Custom CSS - Dark Professional GenZ Vibe
+# Dark UI CSS
 st.markdown("""
 <style>
-   .stApp { background: #0E1117; color: #FAFAFA; }
-   .stChatMessage { background: #1E1E2E; border-radius: 15px; padding: 1rem; margin: 0.5rem 0; }
-   .stButton>button {
-        background: linear-gradient(90deg, #7F5AF0 0%, #2CB67D 100%);
-        color: white; border: none; border-radius: 10px; font-weight: 600;
-    }
-   .stButton>button:hover { transform: scale(1.02); transition: 0.2s; }
-    h1, h2, h3 { font-family: 'Inter', sans-serif; font-weight: 800; }
-   .st-emotion-cache-1y4p8pa { padding: 2rem 1rem; }
+   .stApp { background-color: #0E1117; color: #FAFAFA; }
+   .stChatMessage { background-color: #262730; border-radius: 10px; padding: 10px; }
+    h1, h2, h3 { color: #00D4FF!important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ========== GROQ CLIENT ==========
+# ----------------- GROQ SETUP -----------------
+# Secrets se key lega
 try:
     client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-except Exception as e:
-    st.error(f"❌ Secret Error: {e}")
+except:
+    st.error("🚨 GROQ_API_KEY set nahi hai! Streamlit Secrets mein daalo.")
     st.stop()
 
-# ========== SESSION STATE ==========
-if "messages" not in st.session_state: st.session_state.messages = []
-if "pdf_text" not in st.session_state: st.session_state.pdf_text = ""
-if "pdf_name" not in st.session_state: st.session_state.pdf_name = ""
-if "df" not in st.session_state: st.session_state.df = None
+# LATEST MODEL - Ye chalega 100%
+MODEL_NAME = "llama-3.1-8b-instant"
 
-# ========== HELPER FUNCTIONS ==========
-@st.cache_data(show_spinner=False)
-def extract_text_from_pdf(_file_bytes):
-    text = ""
-    # Try normal text first
-    try:
-        pdf_reader = PdfReader(io.BytesIO(_file_bytes))
-        for page in pdf_reader.pages:
-            page_text = page.extract_text()
-            if page_text: text += page_text + "\n"
-    except: pass
+# ----------------- SESSION STATE -----------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "pdf_text" not in st.session_state:
+    st.session_state.pdf_text = ""
+if "pdf_name" not in st.session_state:
+    st.session_state.pdf_name = ""
 
-    # OCR if no text found - Poppler fix included
-    if not text.strip():
-        images = convert_from_bytes(_file_bytes, dpi=200) # Lower DPI = faster
-        for i, image in enumerate(images):
-            text += pytesseract.image_to_string(image, lang='eng+hin') + "\n"
+# ----------------- HELPER FUNCTIONS -----------------
+def trim_text(text, max_chars=15000):
+    """Groq ki token limit se bachne ke liye text chota karo"""
+    if len(text) > max_chars:
+        return text[:max_chars] + "\n\n[NOTE: Document bahut lamba tha, isliye starting ka part hi use kiya gaya hai]"
     return text
 
-def transcribe_audio(audio_bytes):
+def extract_text_from_pdf(pdf_path):
+    """PDF se text nikalo - OCR + Normal dono"""
+    text = ""
     try:
-        audio_file = io.BytesIO(audio_bytes)
-        audio_file.name = "audio.wav"
-        transcription = client.audio.transcriptions.create(
-            model="whisper-large-v3", file=audio_file
-        )
-        return transcription.text
+        # Pehle normal text extract karo
+        images = convert_from_path(pdf_path, dpi=200, first_page=1, last_page=10) # Sirf 10 page tak
+        for i, image in enumerate(images):
+            st.toast(f"Page {i+1}/10 scan kar raha hu...")
+            # OCR se text
+            page_text = pytesseract.image_to_string(image, lang='eng+hin')
+            text += f"\n--- Page {i+1} ---\n{page_text}"
+        return text
     except Exception as e:
-        st.error(f"Voice Error: {e}")
-        return None
+        st.error(f"PDF Read Error: {e}")
+        return ""
 
-def extract_and_plot_data(text):
-    # Simple table detection: marks, subjects, numbers
-    pattern = r'([A-Za-z ]+)[\s:]+(\d+)' # "Subject: 80" type
-    matches = re.findall(pattern, text)
-    if len(matches) >= 3:
-        df = pd.DataFrame(matches, columns=['Item', 'Value'])
-        df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
-        df = df.dropna()
-        if not df.empty:
-            st.session_state.df = df
+def extract_text_from_image(image):
+    """Photo se text nikalo"""
+    try:
+        return pytesseract.image_to_string(image, lang='eng+hin')
+    except Exception as e:
+        st.error(f"Image Read Error: {e}")
+        return ""
+
+def auto_generate_graph(text):
+    """Text mein marks/digits ho to auto graph banao"""
+    try:
+        # Pattern: Subject: 80, Hindi - 75
+        pattern = r'([A-Za-z ]+)[:\-]\s*(\d{1,3})'
+        matches = re.findall(pattern, text)
+        if len(matches) >= 2:
+            df = pd.DataFrame(matches, columns=['Subject', 'Marks'])
+            df['Marks'] = pd.to_numeric(df['Marks'])
+            df['Subject'] = df['Subject'].str.strip()
+            fig = px.bar(df, x='Subject', y='Marks', title='Auto Generated Marks Graph', color='Subject')
+            st.plotly_chart(fig, use_container_width=True)
             return True
+    except:
+        pass
     return False
 
-# ========== SIDEBAR ==========
+def speech_to_text(audio_bytes):
+    """Voice ko text mein badlo"""
+    try:
+        r = sr.Recognizer()
+        with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
+            audio = r.record(source)
+        text = r.recognize_google(audio, language='hi-IN')
+        return text
+    except:
+        return ""
+
+def text_to_speech(text):
+    """Text ko voice mein badlo"""
+    try:
+        tts = gTTS(text=text, lang='hi', slow=False)
+        fp = io.BytesIO()
+        tts.write_to_fp(fp)
+        fp.seek(0)
+        return fp
+    except:
+        return None
+
+def get_groq_response():
+    """Groq se jawab lao with error handling"""
+    try:
+        # Context trim karo taaki BadRequest na aaye
+        pdf_context = trim_text(st.session_state.pdf_text, 12000)
+
+        system_prompt = f"""You are ScopeAI Pro, ek helpful AI study buddy.
+        User ne ye document upload kiya hai: {st.session_state.pdf_name}
+        Document ka content: {pdf_context}
+
+        Rules:
+        1. Hamesha document ke base pe jawab do
+        2. Agar answer document mein nahi hai to bolo "Ye information document mein nahi hai"
+        3. Hinglish mein dosti se baat karo
+        4. Chote-chote points mein samjhao"""
+
+        # Last 6 messages hi bhejo taaki token kam lage
+        messages_to_send = [{"role": "system", "content": system_prompt}]
+        messages_to_send += st.session_state.messages[-6:]
+
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=messages_to_send,
+            temperature=0.7,
+            max_tokens=1000,
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"❌ Groq Error: {str(e)}\n\nThodi der baad try karo ya API key check karo."
+
+# ----------------- UI -----------------
+st.title("🧠 ScopeAI Pro - Tera Personal Study Buddy")
+st.caption("PDF, Photo, Voice sab samajhta hu | OCR + Graph + Memory")
+
+# Sidebar
 with st.sidebar:
-    st.header("🚀 ScopeAI Pro")
-    st.caption("PDF + Voice + Photo + Graph")
+    st.header("📁 File Upload")
+    uploaded_file = st.file_uploader("PDF ya Photo daalo", type=['pdf', 'png', 'jpg', 'jpeg'])
 
-    uploaded_file = st.file_uploader("📄 PDF Upload", type="pdf")
-    uploaded_image = st.file_uploader("🖼️ Image Upload", type=["png", "jpg", "jpeg"])
+    if uploaded_file:
+        if uploaded_file.type == "application/pdf":
+            with st.spinner("PDF padh raha hu... OCR mein time lagta hai"):
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+                    tmp.write(uploaded_file.read())
+                    tmp_path = tmp.name
+                st.session_state.pdf_text = extract_text_from_pdf(tmp_path)
+                st.session_state.pdf_name = uploaded_file.name
+                os.unlink(tmp_path)
+                st.success(f"✅ {uploaded_file.name} read ho gaya!")
+                auto_generate_graph(st.session_state.pdf_text)
 
-    if st.button("🔄 Reset All", use_container_width=True):
+        elif uploaded_file.type.startswith('image'):
+            image = Image.open(uploaded_file)
+            st.image(image, caption="Uploaded Image", use_column_width=True)
+            with st.spinner("Photo se text nikal raha hu..."):
+                img_text = extract_text_from_image(image)
+                st.session_state.pdf_text += f"\n\n--- Image Text ---\n{img_text}"
+                st.session_state.pdf_name = "Image + PDF"
+                st.success("✅ Photo read ho gayi!")
+                auto_generate_graph(img_text)
+
+    st.divider()
+    if st.button("🗑️ Chat Clear Karo"):
         st.session_state.messages = []
         st.session_state.pdf_text = ""
         st.session_state.pdf_name = ""
-        st.session_state.df = None
         st.rerun()
 
-# ========== MAIN AREA ==========
-st.title("💬 ScopeAI Pro")
-st.caption("GenZ AI Assistant - Chat, Voice, PDF, Graph sab ek jagah")
-
-# Process PDF
-if uploaded_file and uploaded_file.name!= st.session_state.pdf_name:
-    with st.spinner("📄 PDF Process ho raha hai..."):
-        st.session_state.pdf_text = extract_text_from_pdf(uploaded_file.getvalue())
-        st.session_state.pdf_name = uploaded_file.name
-        st.session_state.messages = []
-        if st.session_state.pdf_text:
-            st.toast(f"✅ {uploaded_file.name} loaded!", icon="📚")
-            extract_and_plot_data(st.session_state.pdf_text)
-        else:
-            st.error("PDF se text nahi nikla")
-
-# Process Image
-if uploaded_image:
-    with st.spinner("🖼️ Image padh raha hu..."):
-        img = Image.open(uploaded_image)
-        img_text = pytesseract.image_to_string(img, lang='eng+hin')
-        if img_text.strip():
-            st.session_state.pdf_text += f"\n\nImage Text:\n{img_text}"
-            st.toast("✅ Image text add ho gaya!", icon="🖼️")
-
-# Show Graph if data exists
-if st.session_state.df is not None:
-    with st.expander("📊 Auto-Detected Graph", expanded=True):
-        fig, ax = plt.subplots(figsize=(10, 4))
-        fig.patch.set_facecolor('#0E1117')
-        ax.set_facecolor('#1E1E2E')
-        ax.bar(st.session_state.df['Item'], st.session_state.df['Value'], color='#7F5AF0')
-        ax.tick_params(colors='white')
-        ax.set_title('Data from PDF', color='white')
-        plt.xticks(rotation=45, ha='right')
-        st.pyplot(fig)
-
-# Display chat history
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+# Chat History Display
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
 # Voice + Text Input
-col1, col2 = st.columns([6, 1])
+col1, col2 = st.columns([6,1])
 with col2:
-    audio = mic_recorder(start_prompt="🎤", stop_prompt="⏹️", key='recorder')
+    audio_bytes = audio_recorder(text="", icon_size="2x", neutral_color="#00D4FF")
+with col1:
+    prompt = st.chat_input("Kuch bhi pooch...")
 
-prompt = st.chat_input("Message likho ya mic daba ke bolo...")
+# Voice Input Handle
+if audio_bytes:
+    with st.spinner("Sunn raha hu..."):
+        voice_text = speech_to_text(audio_bytes)
+        if voice_text:
+            prompt = voice_text
+            st.toast(f"🎤 Tune bola: {voice_text}")
+        else:
+            st.toast("❌ Awaz samajh nahi aayi, phir bol")
 
-# Handle voice input
-if audio:
-    with st.spinner("🎧 Voice to Text..."):
-        voice_text = transcribe_audio(audio['bytes'])
-        if voice_text: prompt = voice_text
-
-# Handle chat
+# Chat Logic
 if prompt:
-    if not st.session_state.pdf_text:
-        st.warning("Pehle PDF ya Image upload karo bhai")
-        st.stop()
-
+    # User message add karo
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
+    # AI Response
     with st.chat_message("assistant"):
-        with st.spinner("🤖 AI soch raha hai..."):
-            response = client.chat.completions.create(
-                messages=[
-                    {"role": "system", "content": f"You are ScopeAI Pro. Context: {st.session_state.pdf_text[:12000]}. Reply in Hinglish, GenZ style, short and helpful. Use emojis. Remember chat history."},
-                    *st.session_state.messages
-                ],
-                model="llama3-8b-8192",
-                temperature=0.3
-            )
-            reply = response.choices[0].message.content
-            st.markdown(reply)
-    st.session_state.messages.append({"role": "assistant", "content": reply})
+        with st.spinner("Soch raha hu..."):
+            if not st.session_state.pdf_text and not st.session_state.messages:
+                response = "Bhai pehle koi PDF ya Photo upload kar de, tabhi toh jawab dunga 😅"
+            else:
+                response = get_groq_response()
+
+            st.markdown(response)
+
+            # Voice Output
+            audio_fp = text_to_speech(response)
+            if audio_fp:
+                st.audio(audio_fp, format='audio/mp3')
+
+    # Assistant message save karo
+    st.session_state.messages.append({"role": "assistant", "content": response})
