@@ -1,5 +1,5 @@
 streamlit==1.35.0
-groq
-PyPDF2
-Pillow
-requests
+groq==0.11.0
+PyPDF2==3.0.1
+Pillow==10.2.0
+requests==2.31.0
